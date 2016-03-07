@@ -95,7 +95,7 @@ class LGParser(object):
         #print gameno, url
         identifier = url.split('/')[-3]
         dt = datetime.date(int(gamedate[:4]), int(gamedate[4:6]), int(gamedate[6:8]))
-        if dt >= datetime.date.today():
+        if dt > datetime.date.today():
             return
 
         r = requests.get(url)
@@ -125,7 +125,7 @@ class LGParser(object):
                 homepoints = 1
                 awaypoints = 2
 
-        attendance = info[4].text.split()[-1]
+        attendance = int(info[4].text.split()[-1])
         id = self.season.id*1000+gameno
         
 
@@ -145,25 +145,30 @@ class LGParser(object):
         yield gamedata
 
         events = page.xpath("//div[@class='table']//tr")
+        eventnum = 1
         for e in events:
             if e.attrib.get('class') in ['odd', 'even']:
                 tds = e.xpath("td")
                 if tds and len(tds) == 3:
                     home, gtime, away = tds
                     if gtime.text and len(gtime.text) == 5 and gtime.text[2] == ':':
-                        e = self.parsegameevent(gamedata, home, gtime, away)
+                        e = self.parsegameevent(gamedata, eventnum, home, gtime, away)
                         if e:
+                            eventnum += 1
                             yield e
                             
-    def parsegameevent(self, gamedata, home, gtime, away):
+    def parsegameevent(self, gamedata, eventnum, home, gtime, away):
         #print gtime.text
+        id = gamedata.id * 1000000 + int(gtime.text.replace(':',''))*100 + eventnum
         ret = []
         if home.text:
             elem = home
             team = gamedata.home.get('team')
+            vsteam = gamedata.away.get('team')
         if away.text:
             elem = away
             team = gamedata.away.get('team')
+            vsteam = gamedata.home.get('team')
             if home.text:
                 raise Exception("Both home and away event %s" % gtime)
         #print html.tostring(elem)
@@ -186,9 +191,10 @@ class LGParser(object):
         def playerdata(data):
             return dict(
                 number=int(data[0]),
-                id=data[1],
+                id=data[1].replace('/pelaajat/',''),
                 name=data[2],
                 team=team,
+                vsteam=vsteam
             )
             
         eventattr = {}
@@ -197,17 +203,26 @@ class LGParser(object):
             scorer = players[0]
             eventattr['scorer'] = playerdata(scorer)
             eventattr['score'] = scorer[3]
+            eventattr['assist1'] = None
+            eventattr['assist2'] = None
             if len(players) > 1:
                 eventattr['assist1'] = playerdata(players[1])
             if len(players) > 2:
                 eventattr['assist2'] = playerdata(players[2])
-            metatext = players[-1][3]
+            metatext = players[-1][3].replace(')','').strip() + "," + strong.tail.replace('(', '')
             goalmeta = []
-            for meta in ['YV', 'YV2', 'VM', 'TV', 'TM', 'RL', 'AV', 'AV2', 'RL', 'IM']:
-                if meta in metatext:
+
+            for meta in [m.strip() for m in metatext.split(',') if m.strip()]:
+                if meta == eventattr['score']:
+                    continue
+
+                if meta in ['YV', 'YV2', 'AV', 'AV2', 'VT', 'VM', 'TM', 'TV', 'IM', 'SR', 'RL']:
                     goalmeta.append(meta)
+                else:
+                    raise Exception("Unknown game meta '%s'" % meta)
+                    
             if gtime.text > '60:00':
-                goalmeta.append('OT')
+                goalmeta.append('JA')
 
             eventattr['goalmeta'] = ' '.join(goalmeta)
                 
@@ -216,14 +231,20 @@ class LGParser(object):
             eventtype = 'goal'
             eventattr['scorer'] = dict(
                 number=int(strong.text.strip()[1:]),
-                id=playermeta[0][0],
+                id=playermeta[0][0].replace('/pelaajat/',''),
                 name=playermeta[0][1],
+                team=team,
+                vsteam=vsteam
             )
+            eventattr['assist1'] = None
+            eventattr['assist2'] = None
             eventattr['score'] = playermeta[0][2]
             eventattr['goalmeta'] = 'VL'
 
         elif players and (" min " in players[0][3] or " min " in elem.text):
             eventtype = 'penalty'
+            eventattr['player'] = None
+            eventattr['boxed'] = None
             if " min " in players[0][3]:
                 words = players[0][3].split()
 
@@ -255,11 +276,14 @@ class LGParser(object):
             eventattr['minutes'] = 0
             eventattr['player'] = playerdata(players[0])
             eventattr['reason'] = players[0][3].strip()
+            eventattr['boxed'] = None
+            
 
         elif players and "Joukkuerangaistus" in elem.text:
             eventtype = 'penalty'
             eventattr['minutes'] = 0
-            eventattr['player'] = playerdata(players[0])
+            eventattr['player'] = None
+            eventattr['boxed'] = playerdata(players[0])
             eventattr['reason'] = elem.text.strip()
             eventattr['penaltymeta'] = 'teampenalty'
 
@@ -270,23 +294,27 @@ class LGParser(object):
             eventattr['minutes'] = int(words[minindex-1])
             eventattr['reason'] = " ".join(words[minindex+1:])
             eventattr['penaltymeta'] = 'teampenalty'
+            eventattr['player'] = None
+            eventattr['boxed'] = None
 
         elif 'aikalis' in elem.text:
             eventtype = 'timeout'
 
         elif 'Maalivahti ulos' in elem.text:
-            eventtype = 'goalieout'
-            eventattr['player'] = playerdata(players[0])
+            eventtype = 'goalkeeperout'
+            eventattr['goalkeeperout'] = playerdata(players[0])
+            eventattr['goalkeeperin'] = None
 
         elif 'Maalivahti sis' in elem.text:
-            eventtype = 'goaliein'
-            eventattr['player'] = playerdata(players[0])
+            eventtype = 'goalkeeperin'
+            eventattr['goalkeeperin'] = playerdata(players[0])
+            eventattr['goalkeeperout'] = None
 
         elif 'Maalivahdin vaihto' in elem.text:
             if "ulos" in players[0][3]:
-                eventtype = 'goaliechange'
-                eventattr['goalieout'] = playerdata(players[0])
-                eventattr['goaliein'] = playerdata(players[1])
+                eventtype = 'goalkeeperchange'
+                eventattr['goalkeeperout'] = playerdata(players[0])
+                eventattr['goalkeeperin'] = playerdata(players[1])
 
         elif 'Videotarkistus - ei maalia' in elem.text:
             eventtype = 'videocheck'
@@ -294,14 +322,23 @@ class LGParser(object):
         elif 'Rangaistuslaukaus - ei maalia' in elem.text:
             eventtype = 'penaltyshot'
             eventattr['result'] = 'no goal'
+            eventattr['player'] = dict(
+                id = None,
+                number = None,
+                name = elem.text[elem.text.index('(')+1:elem.text.index(')')],
+                team = team,
+                vsteam = vsteam
+                )
 
         elif gtime.text == '65:00' and playermeta and not players:
             eventtype = 'penaltyshot'
             
             eventattr['player'] = dict(
                 number=int(elem.text.strip()[1:]),
-                id=playermeta[0][0],
+                id=playermeta[0][0].replace('/pelaajat/',''),
                 name=playermeta[0][1],
+                team=team,
+                vsteam=vsteam
             )
             if "ei maalia" in playermeta[0][2]:
                 eventattr['result'] = 'no goal'
@@ -311,12 +348,29 @@ class LGParser(object):
         else:
             raise Exception("Unknown gameevent, players: %s, elem.text: '%s'" % (players, elem.text))
 
+        if 'reason' in eventattr and eventattr['reason'].endswith('('):
+            eventattr['reason'] = eventattr['reason'][:-2].strip()
+
+        if gtime.text < '20:00':
+            period = '1'
+        elif gtime.text < '40:00':
+            period = '2'
+        elif gtime.text < '60:00':
+            period = '3'
+        elif gtime.text < '65:00':
+            period = 'JA'
+        elif gtime.text == '65:00':
+            period = 'VL'
 
         return GameEventData(
+            id = id,
+            season = gamedata.season,
             gameid=gamedata.id,
             time=gtime.text,
             eventtype=eventtype,
             team=team,
+            vsteam=vsteam,
+            period=period,
             teammeta=elem.attrib['class'],
             **eventattr
         )
