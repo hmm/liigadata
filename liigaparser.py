@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
 
 import datetime
 import urlparse
@@ -75,7 +77,6 @@ class LGParser(object):
 
         for e in self.getgames(page):
             yield e
-        
 
 
     def getteams(self, page):
@@ -86,6 +87,9 @@ class LGParser(object):
                 team = TeamData(name=t.text, id=t.attrib['value'])
                 self.teams[team.name] = team
                 yield team
+
+    def getgameteams(self, page):
+        pass
 
     def getgames(self, page):
         games = page.xpath("//table[@id='games']/tbody/tr")
@@ -143,7 +147,7 @@ class LGParser(object):
                     team=team,
                     position=values[1],
                     goals=int(values[2]),
-                    passes=int(values[3]),
+                    assists=int(values[3]),
                     points=int(values[4]),
                     penalties=int(values[5]),
                     plus=int(values[6]),
@@ -179,7 +183,7 @@ class LGParser(object):
                     goalsagainst=int(values[2]),
                     savepct=self.genpct(values[3]),
                     goals=int(values[4]),
-                    passes=int(values[5]),
+                    assists=int(values[5]),
                     points=int(values[6]),
                     penalties=int(values[7]),
                     playtime=values[8],
@@ -191,12 +195,16 @@ class LGParser(object):
         url = urlparse.urljoin(self.url, gameurl)
         #print gameno, url
         identifier = url.split('/')[-3]
-        dt = datetime.date(int(gamedate[:4]), int(gamedate[4:6]), int(gamedate[6:8]))
-        if dt > datetime.date.today():
-            return
+        if gamedate:
+            dt = datetime.date(int(gamedate[:4]), int(gamedate[4:6]), int(gamedate[6:8]))
+            if dt > datetime.date.today():
+                return
 
         r = requests.get(url)
         page = html.fromstring(r.content)
+        if not teams:
+            for e in self.getteams(page):
+                yield e
 
         hometeam = self.teams[teams[0]].id
         awayteam = self.teams[teams[1]].id
@@ -225,7 +233,6 @@ class LGParser(object):
         attendance = int(info[4].text.split()[-1])
         id = self.season.id*1000+gameno
         
-
         gamedata = GameData(
             id=id,
             number=gameno,
@@ -262,6 +269,11 @@ class LGParser(object):
         events = page.xpath("//div[@class='table']//tr")
         eventnum = 1
         category = None
+                    
+        self.psorder = 0
+        self.pshomeorder = 0
+        self.psawayorder = 0
+        
         for e in events:
             ecls = e.attrib.get('class')
             if ecls in ['odd', 'even', 'period', 'shooting-stats odd', 'shooting-stats even']:
@@ -310,6 +322,7 @@ class LGParser(object):
 
         shotdivs = page.xpath("//div[@class='shooting-map-container']/div")
         location = None
+        shotnums = {}
         for s in shotdivs:
             scls = s.attrib.get('class').split()
             if len(scls) == 4:
@@ -355,8 +368,10 @@ class LGParser(object):
                 period = periodtxt.split('-')[-1]
                 if period == '4':
                     period = 'JA'
-
-                id = gamedata.id * 10000 + int(timetxt.replace(':',''))
+                    
+                shotnum = shotnums.get(timetxt, 0)
+                shotnums[timetxt] = shotnum + 1
+                id = gamedata.id * 100000 + int(timetxt.replace(':','')) * 10 + shotnum
                 shot = GameEventData(
                     id = id,
                     season = gamedata.season,
@@ -377,12 +392,12 @@ class LGParser(object):
         awaygamescore = 0
 
         for p in periods + [gamestats]:
-            homegamescore += int(p['homescore'])
-            awaygamescore += int(p['awayscore'])
+            homegamescore += int(p.get('homescore', 0))
+            awaygamescore += int(p.get('awayscore', 0))
             pdict = dict(
                 home = dict(
                     team=hometeam,
-                    score=int(p['homescore']),
+                    score=int(p.get('homescore', 0)),
                     gamescore = homegamescore,
                     shots=int(p['hometotal']),
                     faceoffs=self.intorNone(p.get('homefaceoffs')),
@@ -392,7 +407,7 @@ class LGParser(object):
                 ),
                 away = dict(
                     team=awayteam,
-                    score=int(p['awayscore']),
+                    score=int(p.get('awayscore', 0)),
                     gamescore = awaygamescore,
                     shots=int(p['awaytotal']),
                     faceoffs=self.intorNone(p.get('awayfaceoffs')),
@@ -427,10 +442,12 @@ class LGParser(object):
             elem = home
             team = gamedata.home.get('team')
             vsteam = gamedata.away.get('team')
+            athome = True
         if away.text:
             elem = away
             team = gamedata.away.get('team')
             vsteam = gamedata.home.get('team')
+            athome = False
             if home.text:
                 raise Exception("Both home and away event %s" % gtime)
         #print html.tostring(elem)
@@ -490,12 +507,21 @@ class LGParser(object):
 
         elif strong is not None and not players:
             eventtype = 'goal'
+            self.psorder += 1
+            if athome:
+                self.pshomeorder += 1
+                psteamorder = self.pshomeorder
+            else:
+                self.psawayorder += 1
+                psteamorder = self.psawayorder
+
             eventattr['scorer'] = dict(
                 number=int(strong.text.strip()[1:]),
                 id=playermeta[0][0].replace('/pelaajat/',''),
-                #name=playermeta[0][1],
                 team=team,
             )
+            eventattr['psorder']=self.psorder
+            eventattr['psteamorder']=psteamorder
             eventattr['assist1'] = None
             eventattr['assist2'] = None
             eventattr['score'] = playermeta[0][2]
@@ -516,6 +542,7 @@ class LGParser(object):
                 minindex = words.index('min')
                 eventattr['minutes'] = int(words[minindex-1])
                 eventattr['reason'] = " ".join(words[minindex+1:])
+                eventattr['boxed'] = playerdata(players[0])
                 eventattr['penaltyattr'] = 'teampenalty'
                 
 
@@ -590,24 +617,39 @@ class LGParser(object):
 
         elif gtime.text == '65:00' and playermeta and not players:
             eventtype = 'penaltyshot'
-            
+            self.psorder += 1
+            if athome:
+                self.pshomeorder += 1
+                psteamorder = self.pshomeorder
+            else:
+                self.psawayorder += 1
+                psteamorder = self.psawayorder
+
             eventattr['player'] = dict(
                 number=int(elem.text.strip()[1:]),
                 id=playermeta[0][0].replace('/pelaajat/',''),
-                #name=playermeta[0][1],
                 team=team,
             )
+            eventattr['psorder']=self.psorder
+            eventattr['psteamorder']=psteamorder
             if "ei maalia" in playermeta[0][2]:
                 eventattr['scored'] = False
             elif "maali" in playermeta[0][2]:
                 eventattr['scored'] = True
-
 
         else:
             raise Exception("Unknown gameevent, players: %s, elem.text: '%s'" % (players, elem.text))
 
         if 'reason' in eventattr and eventattr['reason'].endswith('('):
             eventattr['reason'] = eventattr['reason'][:-2].strip()
+
+        if eventtype == 'penalty':
+            if eventattr['reason'].endswith(u' - käytösrangaistus'):
+                eventattr['reason'] = eventattr['reason'].replace(u' - käytösrangaistus', '')
+            elif eventattr['reason'].endswith(' - pelirangaistus'):
+                eventattr['reason'] = eventattr['reason'].replace(' - pelirangaistus', '')
+            elif eventattr['reason'].startswith('Joukkuerangaistus '):
+                eventattr['reason'] = eventattr['reason'].replace('Joukkuerangaistus ', '')
 
         if gtime.text < '20:00':
             period = '1'
