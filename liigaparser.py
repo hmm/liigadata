@@ -14,13 +14,18 @@ from lxml import html
 class ParserData(object):
     
     def __init__(self, **values):
-        self.values = values
-        self.values['type'] = self.type
+        self.__values = values
+        self.__values['type'] = self.type
         for attr in values:
             setattr(self, attr, values[attr])
 
+    def __setattr__(self, attr, value):
+        if not attr.startswith('_'):
+            self.__values[attr] = value
+        super(ParserData, self).__setattr__(attr, value)
+    
     def tojson(self):
-        return json.dumps(self.values, sort_keys=True)
+        return json.dumps(self.__values, sort_keys=True)
 
     def __str__(self):
         return str(self.values)
@@ -57,7 +62,6 @@ class LGParser(object):
 
     def __init__(self, url):
         self.url = url
-        self.season = self.getseason(self.url)
 
     def getseason(self, url):
         for p in url.split('/'):
@@ -66,9 +70,11 @@ class LGParser(object):
                 return SeasonData(id=id, years=p)
 
 
-    def parse(self):
+    def parseseason(self):
         r = requests.get(self.url)
         page = html.fromstring(r.content)
+
+        self.season = self.getseason(self.url)
 
         yield self.season
 
@@ -78,6 +84,19 @@ class LGParser(object):
         for e in self.getgames(page):
             yield e
 
+    def parseplayoffs(self):
+        r = requests.get(self.url)
+        page = html.fromstring(r.content)
+
+        self.season = self.getseason(self.url)
+        self.season.playoffs = True
+
+        yield self.season
+
+        self.getplayoffsteams(page)
+
+        for e in self.getplayoffsgames(page):
+            yield e
 
     def getteams(self, page):
         teams = page.xpath("//select[@name='team']/option")
@@ -87,6 +106,29 @@ class LGParser(object):
                 team = TeamData(name=t.text, id=t.attrib['value'])
                 self.teams[team.name] = team
                 yield team
+
+    def getplayoffsteams(self, page):
+        self.teams = {}
+        for (name, id) in [
+                ['Blues',     'blues'],
+                ['HIFK',      'hifk'],
+                ['HPK',       'hpk'],
+                ['Ilves',     'ilves'],
+                ['JYP',       'jyp'],
+                ['KalPa',     'kalpa'],
+                ['KooKoo',    'kookoo'],
+                [u'Kärpät',    'karpat'],
+                ['Lukko',     'lukko'],
+                ['Pelicans',  'pelicans'],
+                ['SaiPa',     'saipa'],
+                ['Sport',     'sport'],
+                ['Tappara',   'tappara'],
+                ['TPS',       'tps'],
+                [u'Ässät',     'assat'],
+        ]:
+            team = TeamData(name=name, id=id)
+            self.teams[team.name] = team
+
 
     def getgameteams(self, page):
         pass
@@ -106,6 +148,23 @@ class LGParser(object):
             for e in self.parsegame(gameno, gamedate, gameurl, teams):
                 yield e
 
+    def getplayoffsgames(self, page):
+        games = page.xpath("//table[@class='games-list-table']/tbody/tr")
+        gameno = 901
+        for tr in games:
+            url = tr.xpath("td/a[@title='Seuranta']")
+            if not url:
+                continue
+            tds = tr.xpath("td")
+            teamstd = tr.xpath("td[@class='ta-l']/a")
+            teams = [t.strip() for t in teamstd[0].text.split('-')]
+            seriesgameno = int(tds[0].text)
+            gamedate = tr.attrib.get('data-time')
+            gameurl = url[0].attrib.get('href')
+
+            for e in self.parsegame(gameno, gamedate, gameurl, teams, playoffs=True, seriesgameno=seriesgameno):
+                yield e
+            gameno += 1
             
     def genpct(self, s):
         if not s or s == '-':
@@ -142,6 +201,7 @@ class LGParser(object):
                     id=pid.replace('/pelaajat/',''),
                     gameid=gamedata.id,
                     season=gamedata.season,
+                    playoffs=gamedata.playoffs,
                     name=pname,
                     number=int(values[0]),
                     team=team,
@@ -176,6 +236,7 @@ class LGParser(object):
                     id=pid.replace('/pelaajat/',''),
                     gameid=gamedata.id,
                     season=gamedata.season,
+                    playoffs = gamedata.playoffs,
                     name=pname,
                     number=int(values[0]),
                     team=team,
@@ -191,7 +252,7 @@ class LGParser(object):
                 yield gk
                 
 
-    def parsegame(self, gameno, gamedate, gameurl, teams):
+    def parsegame(self, gameno, gamedate, gameurl, teams, playoffs=False, seriesgameno=None):
         url = urlparse.urljoin(self.url, gameurl)
         #print gameno, url
         identifier = url.split('/')[-3]
@@ -213,22 +274,29 @@ class LGParser(object):
         (homescore, _, awayscore) = info[0].text.split()
         score = "%d-%d" % (int(homescore), int(awayscore))
 
-        periods = info[1].text
+        periodstxt = info[1].text
+
         tm = info[2].text.split()[0]
-        if tm == '60:00':
-            if homescore > awayscore:
-                homepoints = 3
-                awaypoints = 0
+        if not playoffs:
+            if tm == '60:00':
+                if homescore > awayscore:
+                    homepoints = 3
+                    awaypoints = 0
+                else:
+                    homepoints = 0
+                    awaypoints = 3
             else:
-                homepoints = 0
-                awaypoints = 3
+                if homescore > awayscore:
+                    homepoints = 2
+                    awaypoints = 1
+                else:
+                    homepoints = 1
+                    awaypoints = 2
+            home = dict(score=homescore, points=homepoints, team=hometeam)
+            away = dict(score=awayscore, points=awaypoints, team=awayteam)
         else:
-            if homescore > awayscore:
-                homepoints = 2
-                awaypoints = 1
-            else:
-                homepoints = 1
-                awaypoints = 2
+            home = dict(score=homescore, team=hometeam)
+            away = dict(score=awayscore, team=awayteam)
 
         attendance = int(info[4].text.split()[-1])
         id = self.season.id*1000+gameno
@@ -239,13 +307,16 @@ class LGParser(object):
             identifier=identifier,
             date=str(dt),
             season=self.season.years,
+            playoffs=playoffs,
             time=tm,
-            periods=periods,
+            home=home,
+            away=away,
+            periods=periodstxt,
             score=score,
-            home = dict(score=homescore, points=homepoints, team=hometeam),
-            away = dict(score=awayscore, points=awaypoints, team=awayteam),
             attendance=attendance,
             )
+        if playoffs:
+            gamedata.seriesgameno=seriesgameno
         yield gamedata
 
         playersbyname = {}
@@ -260,10 +331,15 @@ class LGParser(object):
             yield e
 
         periods = []
-        for i in range(1,4):
-            periods.append(dict(number=i, name=str(i)))
-        if tm > '60:00':
-            periods.append(dict(number=4, name='JA'))
+        if not playoffs:
+            for i in range(1,4):
+                periods.append(dict(number=i, name=str(i)))
+            if tm > '60:00':
+                periods.append(dict(number=4, name='JA'))
+        else:
+            for i in range(1, len(periodstxt.split(','))):
+                periods.append(dict(number=i, name=str(i)))
+
         gamestats = dict()
 
         events = page.xpath("//div[@class='table']//tr")
@@ -375,6 +451,7 @@ class LGParser(object):
                 shot = GameEventData(
                     id = id,
                     season = gamedata.season,
+                    playoffs = gamedata.playoffs,
                     gameid = gamedata.id,
                     time = timetxt,
                     eventtype = 'shot',
@@ -421,6 +498,7 @@ class LGParser(object):
                     id=gamedata.id*100+p['number'],
                     gameid = gamedata.id,
                     season = gamedata.season,
+                    playoffs = gamedata.playoffs,
                     period=p['name'],
                     **pdict)
                 yield pd
@@ -431,6 +509,7 @@ class LGParser(object):
                     id=gamedata.id,
                     gameid = gamedata.id,
                     season = gamedata.season,
+                    playoffs = gamedata.playoffs,
                     **pdict)
                 yield gamestats
                             
@@ -615,7 +694,7 @@ class LGParser(object):
             pp = playersbyname[(team, elem.text[elem.text.index('(')+1:elem.text.index(')')])]
             eventattr['player'] = pp
 
-        elif gtime.text == '65:00' and playermeta and not players:
+        elif gtime.text == '65:00' and playermeta and not players and not gamedata.playoffs:
             eventtype = 'penaltyshot'
             self.psorder += 1
             if athome:
@@ -651,20 +730,25 @@ class LGParser(object):
             elif eventattr['reason'].startswith('Joukkuerangaistus '):
                 eventattr['reason'] = eventattr['reason'].replace('Joukkuerangaistus ', '')
 
-        if gtime.text < '20:00':
-            period = '1'
-        elif gtime.text < '40:00':
-            period = '2'
-        elif gtime.text < '60:00':
-            period = '3'
-        elif gtime.text < '65:00':
-            period = 'JA'
-        elif gtime.text == '65:00':
-            period = 'VL'
+        if gamedata.playoffs:
+            minutes = int(gtime.text.split(':')[0])
+            period = str(minutes/20+1)
+        else:
+            if gtime.text < '20:00':
+                period = '1'
+            elif gtime.text < '40:00':
+                period = '2'
+            elif gtime.text < '60:00':
+                period = '3'
+            elif gtime.text < '65:00':
+                period = 'JA'
+            elif gtime.text == '65:00':
+                period = 'VL'
 
         return GameEventData(
             id = id,
             season = gamedata.season,
+            playoffs = gamedata.playoffs,
             gameid=gamedata.id,
             time=gtime.text,
             eventtype=eventtype,
@@ -678,7 +762,18 @@ class LGParser(object):
 
 
 if __name__ == "__main__":
-    for url in sys.argv[1:]:
-        parser = LGParser(url)
-        for event in parser.parse():
+    urltype = sys.argv[1]
+    url = sys.argv[2]
+
+    parser = LGParser(url)
+    if urltype == 'season':
+        for event in parser.parseseason():
             print event.tojson()
+    elif urltype == 'playoffs':
+        for event in parser.parseplayoffs():
+            print event.tojson()
+    elif urltype == 'game':
+        for event in parser.parsegameurl():
+            print event.tojson()
+        
+        
