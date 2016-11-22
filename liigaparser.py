@@ -398,18 +398,21 @@ class LGParser(object):
 
         shotdivs = page.xpath("//div[@class='shooting-map-container']/div")
         location = None
+        eventtxt = None
         shotnums = {}
         for s in shotdivs:
             scls = s.attrib.get('class').split()
-            if len(scls) == 4:
-                (_, location, periodtxt, playertxt) = scls
-            elif len(scls) == 5:
-                (_, __, location, periodtxt, playertxt) = scls
+            if len(scls) == 5:
+                (_, location, periodtxt, eventtxt, playertxt) = scls
+            #if len(scls) == 4:
+            #    (_, location, periodtxt, playertxt) = scls
+            #elif len(scls) == 5:
+            #    (_, __, location, periodtxt, playertxt) = scls
             elif 'shot-tooltip' in scls:
-                #print location, period, player
+                #print location, player
                 shootername = s.text.strip().split(':')[-1].strip()
                 (team, timetxt, resultxt) = [e.tail.strip().split(':', 1)[-1].strip() for e in s.xpath('br')]
-                #print shooter, team, timetxt, resultxt
+                #print shootername, team, timetxt, resultxt
                 blocker = None
 
                 if not location:
@@ -734,16 +737,20 @@ class LGParser(object):
             minutes = int(gtime.text.split(':')[0])
             period = str(minutes/20+1)
         else:
-            if gtime.text < '20:00':
+            if gtime.text <= '20:00':
                 period = '1'
-            elif gtime.text < '40:00':
+            elif gtime.text <= '40:00':
                 period = '2'
-            elif gtime.text < '60:00':
+            elif gtime.text <= '60:00':
                 period = '3'
             elif gtime.text < '65:00':
                 period = 'JA'
             elif gtime.text == '65:00':
-                period = 'VL'
+                if eventtype == 'goal':
+                    period = 'VL'
+                else:
+                    period = 'JA'
+
 
         return GameEventData(
             id = id,
