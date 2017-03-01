@@ -349,6 +349,7 @@ class LGParser(object):
         self.psorder = 0
         self.pshomeorder = 0
         self.psawayorder = 0
+        gkstarts = False
         
         for e in events:
             ecls = e.attrib.get('class')
@@ -371,6 +372,21 @@ class LGParser(object):
                         gamestats['homefaceoffs'] = hnums[-1]
                         gamestats['awayfaceoffs'] = anums[-1]
                             
+                    elif category == 'Ylivoimapeli':
+                        if gtime.text == 'Yv-maalit':
+                            gamestats['homeppgoals'] = int(home.text)
+                            gamestats['awayppgoals'] = int(away.text)
+                        elif gtime.text == 'Yv-kerrat':
+                            gamestats['homeppchances'] = int(home.text)
+                            gamestats['awayppchances'] = int(away.text)
+                        elif gtime.text == 'Yv-prosentti':
+                            attrname = 'pppct'
+                            gamestats['homepppct'] = home.text.split()[0]
+                            gamestats['awaypppct'] = away.text.split()[0]
+                        elif gtime.text == 'Yv-aika':
+                            gamestats['homepptime'] = home.text.strip()
+                            gamestats['awaypptime'] = away.text.strip()
+
                     elif category == 'Laukaisukartta':
                         if gtime.text == 'Maali':
                             attrname = 'score'
@@ -391,7 +407,31 @@ class LGParser(object):
 
 
                     elif category == 'Maalivahdit':
-                        pass
+                        if not gkstarts:
+                            i = 1
+                            for (gke, team, vsteam) in [(home, hometeam, awayteam), (away, awayteam, hometeam)]:
+                                number = int(gke.text.strip().replace('#', ''))
+                                playerid = gke.xpath("a")[0].attrib.get('href').replace('/pelaajat/','')
+                                gkin = GameEventData(
+                                    id = gamedata.id * 100000 + i,
+                                    season = gamedata.season,
+                                    playoffs = gamedata.playoffs,
+                                    gameid = gamedata.id,
+                                    time = '00:00',
+                                    eventtype = 'goalkeeper',
+                                    event = 'start',
+                                    team = team,
+                                    vsteam = vsteam,
+                                    period = '1',
+                                    playerin = dict(team = team,
+                                                    id = playerid,
+                                                    number = number
+                                                ),
+                                    playerout = None
+                                )
+                                yield gkin
+                                i += 1
+                            gkstarts = True
 
                 elif ecls == 'period' and tds and len(tds) == 1:
                     category = tds[0].text
@@ -506,8 +546,11 @@ class LGParser(object):
                     **pdict)
                 yield pd
             else:
-                del pdict['home']['gamescore']
-                del pdict['away']['gamescore']
+                for t in ['home', 'away']:
+                    del pdict[t]['gamescore']
+                    for attr in ['ppgoals', 'ppchances', 'pppct', 'pptime']:
+                        pdict[t][attr] = p.get("%s%s" % (t, attr))
+                    
                 gamestats = GameStatsData(
                     id=gamedata.id,
                     gameid = gamedata.id,
@@ -531,7 +574,16 @@ class LGParser(object):
             vsteam = gamedata.home.get('team')
             athome = False
             if home.text:
-                raise Exception("Both home and away event %s" % gtime)
+                if gtime.text == '65:00':
+                    if home.text.startswith("(MV "):
+                        gke = home
+                    elif away.text.startswith("(MV "):
+                        elem = home
+                        gke = away
+                        team = gamedata.home.get('team')
+                        vsteam = gamedata.away.get('team')
+                else:
+                    raise Exception("Both home and away event %s" % html.tostring(gtime))
         #print html.tostring(elem)
 
         strong = None
@@ -604,6 +656,11 @@ class LGParser(object):
             )
             eventattr['psorder']=self.psorder
             eventattr['psteamorder']=psteamorder
+            eventattr['pskeeper']=dict(
+                number=int(gke.text.strip()[5:]),
+                id=gke.xpath("a")[0].attrib.get('href').replace('/pelaajat/',''),
+                team=vsteam,
+            )
             eventattr['assist1'] = None
             eventattr['assist2'] = None
             eventattr['score'] = playermeta[0][2]
@@ -696,6 +753,7 @@ class LGParser(object):
             eventattr['scored'] = False
             pp = playersbyname[(team, elem.text[elem.text.index('(')+1:elem.text.index(')')])]
             eventattr['player'] = pp
+            eventattr['keeper'] = None
 
         elif gtime.text == '65:00' and playermeta and not players and not gamedata.playoffs:
             eventtype = 'penaltyshot'
@@ -711,6 +769,11 @@ class LGParser(object):
                 number=int(elem.text.strip()[1:]),
                 id=playermeta[0][0].replace('/pelaajat/',''),
                 team=team,
+            )
+            eventattr['keeper'] = dict(
+                number=int(gke.text.strip()[5:]),
+                id=gke.xpath("a")[0].attrib.get('href').replace('/pelaajat/',''),
+                team=vsteam,
             )
             eventattr['psorder']=self.psorder
             eventattr['psteamorder']=psteamorder
@@ -746,7 +809,7 @@ class LGParser(object):
             elif gtime.text < '65:00':
                 period = 'JA'
             elif gtime.text == '65:00':
-                if eventtype == 'goal':
+                if eventtype in ['goal', 'penaltyshot']:
                     period = 'VL'
                 else:
                     period = 'JA'
