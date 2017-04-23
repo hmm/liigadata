@@ -46,6 +46,9 @@ class PlayerData(ParserData):
 class GoalkeeperData(ParserData):
     type = 'goalkeeper'
 
+class RefereeData(ParserData):
+    type = 'referee'
+
 class PeriodData(ParserData):
     type = 'period'
 
@@ -177,7 +180,64 @@ class LGParser(object):
         else:
             return int(i)
 
-    def parseplayers(self, gameurl, gamedata, hometeam, awayteam):
+    def parseroster(self, gameurl, gamedata, hometeam, awayteam):
+        url = gameurl.replace('seuranta', 'kokoonpanot')
+        r = requests.get(url)
+        page = html.fromstring(r.content)
+
+        homelines = page.xpath("//div[@class='team home']//div[@class='line']")
+        awaylines = page.xpath("//div[@class='team away']//div[@class='line']")
+        refereediv = page.xpath("//div[@class='referees']")[0]
+        homedata = {}
+        awaydata = {}
+        referees= []
+        for (lines, teamdata) in [(homelines, homedata), (awaylines, awaydata)]:
+            for l in lines:
+                head = l.xpath("div[@class='head']")[0].text
+                if head.endswith(u"kenttä"):
+                    lineno = int(head[0])
+                else:
+                    lineno = None
+                for p in l.xpath("div/a[@class='player']"):
+                    jersey = int(p.xpath("div[@class='jersey']")[0].text[1:])
+                    teamdata[jersey] = lineno
+                    gh = p.xpath("span[@class='kultainen-kypara']")
+                    if gh:
+                        teamdata['gh'] = jersey
+                    if head == 'Maalivahdit' and 'startgk' not in teamdata:
+                        teamdata['startgk'] = jersey
+                        
+
+        for p in refereediv.xpath("div[@class='player']"):
+
+            jerseyelem = p.xpath("div[@class='jersey']")
+            if jerseyelem and jerseyelem[0] is not None and jerseyelem[0].text:
+                jersey = int(jerseyelem[0].text[1:])
+            else:
+                jersey = 0
+            nametxt = p.xpath("div[@class='name']")[0].text
+            refereetag = u' (Päätuomari)'
+            linesmantag = u' (Linjatuomari)'
+                           
+            if refereetag in nametxt:
+                name = nametxt.replace(refereetag, '')
+                reftype = 'referee'
+            elif linesmantag in nametxt:
+                name = nametxt.replace(linesmantag, '')
+                reftype = 'linesman'
+            else:
+                raise Exception("Unknown referee type %s" % nametxt)
+
+            referees.append(dict(
+                name=name,
+                number=jersey,
+                type=reftype,
+            ))
+                
+        return homedata, awaydata, referees
+    
+
+    def parseplayers(self, gameurl, gamedata, hometeam, awayteam, homelines, awaylines):
         url = gameurl.replace('seuranta', 'tilastot')
         r = requests.get(url)
         page = html.fromstring(r.content)
@@ -189,21 +249,22 @@ class LGParser(object):
         gawayrows = page.xpath("//div[@class='team away']//table[@class='goalie-stats']/tbody/tr")
 
 
-        for (team, rows) in [(hometeam, homerows),
-                             (awayteam, awayrows)]:
+        for (team, rows, lines) in [(hometeam, homerows, homelines),
+                             (awayteam, awayrows, awaylines)]:
             for r in rows:
                 tds = r.xpath("td")
                 pdata = tds[0].xpath("strong/a")[0]
                 pid = pdata.attrib.get('href')
                 pname = pdata.text
                 values = [t.text for t in tds[1:]]
+                number=int(values[0])
                 player = PlayerData(
                     id=pid.replace('/pelaajat/',''),
                     gameid=gamedata.id,
                     season=gamedata.season,
                     playoffs=gamedata.playoffs,
                     name=pname,
-                    number=int(values[0]),
+                    number=number,
                     team=team,
                     position=values[1],
                     goals=int(values[2]),
@@ -221,24 +282,27 @@ class LGParser(object):
                     faceoffs=int(values[14]),
                     faceoffpct=self.genpct(values[15]),
                     playtime=values[16],
+                    lineno=lines[number],
+                    gh=number==lines.get('gh')
                 )
                 yield player
 
-        for (team, rows) in [(hometeam, ghomerows),
-                             (awayteam, gawayrows)]:
+        for (team, rows, lines) in [(hometeam, ghomerows, homelines),
+                             (awayteam, gawayrows, awaylines)]:
             for r in rows:
                 tds = r.xpath("td")
                 pdata = tds[0].xpath("strong/a")[0]
                 pid = pdata.attrib.get('href')
                 pname = pdata.text
                 values = [t.text for t in tds[1:]]
+                number=int(values[0])
                 gk = GoalkeeperData(
                     id=pid.replace('/pelaajat/',''),
                     gameid=gamedata.id,
                     season=gamedata.season,
                     playoffs = gamedata.playoffs,
                     name=pname,
-                    number=int(values[0]),
+                    number=number,
                     team=team,
                     saves=int(values[1]),
                     goalsagainst=int(values[2]),
@@ -248,6 +312,7 @@ class LGParser(object):
                     points=int(values[6]),
                     penalties=int(values[7]),
                     playtime=values[8],
+                    starting=number==lines.get('startgk'),
                 )
                 yield gk
                 
@@ -319,8 +384,10 @@ class LGParser(object):
             gamedata.seriesgameno=seriesgameno
         yield gamedata
 
+        (homelines, awaylines, referees) = self.parseroster(url, gamedata, hometeam, awayteam)
+
         playersbyname = {}
-        for e in self.parseplayers(url, gamedata, hometeam, awayteam):
+        for e in self.parseplayers(url, gamedata, hometeam, awayteam, homelines, awaylines):
             player = dict(
                 team = e.team, 
                 id = e.id, 
@@ -330,6 +397,19 @@ class LGParser(object):
             playersbyname[(e.team, nname)] = player
             yield e
 
+
+        for r in referees:
+            refdata = RefereeData(
+                id = gamedata.id*100+r.get('number'),
+                gameid=gamedata.id,
+                season=gamedata.season,
+                playoffs=gamedata.playoffs,
+                number=r.get('number'),
+                name=r.get('name'),
+                reftype=r.get('type'),
+            )
+            yield refdata
+                
         periods = []
         if not playoffs:
             for i in range(1,4):
