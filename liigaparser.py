@@ -101,6 +101,17 @@ class LGParser(object):
         for e in self.getplayoffsgames(page):
             yield e
 
+    def parsegameurl(self):
+        teams = sys.argv[3:5]
+        self.getplayoffsteams(None)
+        self.season=self.getseason(self.url)
+        gameno = int(sys.argv[5])
+        dt = sys.argv[6]
+        
+        for e in self.parsegame(gameno, dt, self.url, teams, playoffs=True):
+            yield e
+        
+
     def getteams(self, page):
         teams = page.xpath("//select[@name='team']/option")
         self.teams = {}
@@ -208,6 +219,7 @@ class LGParser(object):
                         teamdata['startgk'] = jersey
                         
 
+        refnum = 1
         for p in refereediv.xpath("div[@class='player']"):
 
             jerseyelem = p.xpath("div[@class='jersey']")
@@ -232,7 +244,9 @@ class LGParser(object):
                 name=name,
                 number=jersey,
                 type=reftype,
+                refnum=refnum,
             ))
+            refnum+=1
                 
         return homedata, awaydata, referees
     
@@ -336,7 +350,10 @@ class LGParser(object):
         awayteam = self.teams[teams[1]].id
         
         info = page.xpath("//div[@class='info']/p")
-        (homescore, _, awayscore) = info[0].text.split()
+        infoparts = info[0].text.split()
+        if len(infoparts) != 3:
+            return
+        (homescore, _, awayscore) = infoparts
         score = "%d-%d" % (int(homescore), int(awayscore))
 
         periodstxt = info[1].text
@@ -437,7 +454,7 @@ class LGParser(object):
                 tds = e.xpath("td")
                 if tds and len(tds) == 3:
                     home, gtime, away = tds
-                    if gtime.text and len(gtime.text) == 5 and gtime.text[2] == ':':
+                    if gtime.text and len(gtime.text) > 4 and gtime.text[-3] == ':':
                         e = self.parsegameevent(gamedata, eventnum, home, gtime, away, playersbyname)
                         if e:
                             eventnum += 1
@@ -640,7 +657,7 @@ class LGParser(object):
                 yield gamestats
                             
     def parsegameevent(self, gamedata, eventnum, home, gtime, away, playersbyname):
-        #print gtime.text
+        #print "TIME", gtime.text
         id = gamedata.id * 1000000 + int(gtime.text.replace(':',''))*100 + eventnum
         ret = []
         if home.text:
@@ -694,24 +711,20 @@ class LGParser(object):
             eventtype = 'goal'
             scorer = players[0]
             eventattr['scorer'] = playerdata(scorer)
-            eventattr['score'] = scorer[3]
+            eventattr['score'] = scorer[3].split()[1]
             eventattr['assist1'] = None
             eventattr['assist2'] = None
             if len(players) > 1:
                 eventattr['assist1'] = playerdata(players[1])
             if len(players) > 2:
                 eventattr['assist2'] = playerdata(players[2])
-            attrtext = players[-1][3].replace(')','').strip() + "," + strong.tail.replace('(', '')
-            goalattr = []
 
-            for attr in [m.strip() for m in attrtext.split(',') if m.strip()]:
-                if attr == eventattr['score']:
-                    continue
+            if strong.tail:
+                attrtext = players[-1][3].replace(')','').strip() + "," + strong.tail.replace('(', '')
+            else:
+                attrtext = players[-1][3].strip()
+            goalattr = [s.strip(',') for s in scorer[3].split()[2:]]
 
-                if attr in ['YV', 'YV2', 'AV', 'AV2', 'VT', 'VM', 'TM', 'TV', 'IM', 'SR', 'RL']:
-                    goalattr.append(attr)
-                else:
-                    raise Exception("Unknown game attr '%s'" % attr)
                     
             if gtime.text > '60:00':
                 goalattr.append('JA')
