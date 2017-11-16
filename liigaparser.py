@@ -220,13 +220,15 @@ class LGParser(object):
                         
 
         refnum = 1
+        nonum = 0
         for p in refereediv.xpath("div[@class='player']"):
 
             jerseyelem = p.xpath("div[@class='jersey']")
             if jerseyelem and jerseyelem[0] is not None and jerseyelem[0].text:
                 jersey = int(jerseyelem[0].text[1:])
             else:
-                jersey = 0
+                jersey = nonum
+                nonum+=1
             nametxt = p.xpath("div[@class='name']")[0].text
             refereetag = u' (Päätuomari)'
             linesmantag = u' (Linjatuomari)'

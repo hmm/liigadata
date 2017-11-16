@@ -261,7 +261,7 @@ if __name__ == "__main__":
         for event in parser.parseseason():
             print event.tojson()
     elif urltype == "history":
-        for i in range(1975, 2017):
+        for i in range(1975, 2018):
             url = "http://liiga.fi/ottelut/%d-%d/runkosarja/" % (i, i+1)
             parser = LGParser(url)
             for event in parser.parseseason():
