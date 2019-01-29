@@ -158,7 +158,23 @@ class LGParser(object):
             print origname, teamname
             print self.teams.keys()
             raise
-        
+
+
+    def correctdates(self, gameno, gamedate):
+        if self.season.id == 1979 and gameno > 75 and gameno < 80:
+            if gameno == 76:
+                gameno = 79
+                gamedate = '19781126'
+            else:
+                gameno -= 1
+        elif self.season.id == 1988 and gameno > 125 and gameno < 130:
+            if gameno == 129:
+                gameno = 126
+                gamedate = '19871203'
+            else:
+                gameno += 1
+            
+        return (gameno, gamedate)
 
     def getgames(self, page, playoffs=False):
         games = page.xpath("//table[@id='games']/tbody/tr")
@@ -171,9 +187,13 @@ class LGParser(object):
             gametime = tr.xpath("td[@class='h-l']")[0].text
             #teams = [t.strip() for t in teamstd[0].text.split('-')]
             teams = [s.strip() for s in teamstd[0].text.split('\n') if s.strip()]
-            
+
             gameno = int(tds[0].text)
             gamedate = tr.attrib.get('data-time')
+
+            # fix incorrect dates in liiga.fi 
+            (gameno, gamedate) = self.correctdates(gameno, gamedate)
+            
             gameurl = url[0].attrib.get('href')
             scorelist = tds[5].text.split()
             if scorelist[0] == '-':
@@ -261,7 +281,7 @@ if __name__ == "__main__":
         for event in parser.parseseason():
             print event.tojson()
     elif urltype == "history":
-        for i in range(1975, 2018):
+        for i in range(1975, 2019):
             url = "http://liiga.fi/ottelut/%d-%d/runkosarja/" % (i, i+1)
             parser = LGParser(url)
             for event in parser.parseseason():

@@ -46,10 +46,11 @@ class TeamSHData(ParserData):
 
 class PlayerTimesParser(object):
 
-    def __init__(self, season):
+    def __init__(self, season, serie='runkosarja'):
         self.season = season
         self.seasonstr = "%d-%d" % (season-1, season)
-        self.url = "http://liiga.fi/tilastot/%s/runkosarja/pelaajat/?team=&position=all&home_away=&player_stats=time_on_ice&sort=O#stats-wrapper" % self.seasonstr
+        self.serie = serie
+        self.url = "http://liiga.fi/tilastot/{season}/{serie}/pelaajat/?team=&position=all&home_away=&player_stats=time_on_ice&sort=O#stats-wrapper".format(season=self.seasonstr, serie=self.serie)
         
 
     def parse(self):
@@ -58,7 +59,8 @@ class PlayerTimesParser(object):
 
         timestamp = FileTimestamp(
             timestamp = str(datetime.datetime.now()),
-            season = self.season
+            season = self.season,
+            serie = self.serie,
         )
         yield timestamp
         
@@ -90,7 +92,7 @@ class PlayerTimesParser(object):
             p3time = tds[13].text.strip()
 
             data = PlayerTimeData(
-                id = playerid.replace('/pelaajat/',''),
+                id = playerid.replace('/fi/pelaajat/',''),
                 name = playername,
                 team = team,
                 position = position,
@@ -104,25 +106,28 @@ class PlayerTimesParser(object):
                 p1time = p1time,
                 p2time = p2time,
                 p3time = p3time,
+                serie = self.serie,
             )
             yield data
 
 class TeamTimesParser(object):
 
-    def __init__(self, season):
+    def __init__(self, season, serie='runkosarja'):
         self.season = season
+        self.serie = serie
         self.seasonstr = "%d-%d" % (season-1, season)
 
     def parse(self):
 
         timestamp = FileTimestamp(
             timestamp = str(datetime.datetime.now()),
-            season = self.season
+            season = self.season,
+            serie = self.serie,
         )
         yield timestamp
         
-        ppurl = "http://liiga.fi/tilastot/%s/runkosarja/joukkueet/?stats_type=ylivoima&home_away=&sort=#stats-wrapper" % self.seasonstr
-        shurl = "http://liiga.fi/tilastot/%s/runkosarja/joukkueet/?stats_type=alivoima&home_away=&sort=#stats-wrapper" % self.seasonstr
+        ppurl = "http://liiga.fi/tilastot/{season}/{serie}/joukkueet/?stats_type=ylivoima&home_away=&sort=#stats-wrapper".format(season=self.seasonstr, serie=self.serie)
+        shurl = "http://liiga.fi/tilastot/{season}/{serie}/joukkueet/?stats_type=alivoima&home_away=&sort=#stats-wrapper".format(season=self.seasonstr, serie=self.serie)
 
         for p in self.getteams(ppurl, TeamPPData):
             yield p
@@ -156,6 +161,7 @@ class TeamTimesParser(object):
                 pp2num = int(pp2num),
                 pp2goals = int(pp2goals),
                 sh2goals = int(sh2goals),
+                serie = self.serie,
             )
             if dataclass == TeamSHData:
                 data.shtime = timeval
@@ -168,9 +174,10 @@ class TeamTimesParser(object):
 
 class TeamSHTimesParser(TeamTimesParser):
 
-    def __init__(self, season):
+    def __init__(self, season, serie='runkosarja'):
         self.seasonstr = "%d-%d" % (season-1, season)
-        self.url = "http://liiga.fi/tilastot/%s/runkosarja/joukkueet/?stats_type=alivoima&home_away=&sort=#stats-wrapper" % self.seasonstr
+        self.serie = serie
+        self.url = "http://liiga.fi/tilastot/{season}/{serie}/joukkueet/?stats_type=alivoima&home_away=&sort=#stats-wrapper".format(season=self.seasonstr, serie=self.serie)
         
 
     def getteams(self, page):
@@ -199,6 +206,7 @@ class TeamSHTimesParser(TeamTimesParser):
                 pp2time = pp2time,
                 pp2goals = pp2goals,
                 sh2goals = shgoals,
+                serie = self.serie,
             )
             yield data
 
@@ -206,15 +214,16 @@ class TeamSHTimesParser(TeamTimesParser):
 
 if __name__ == "__main__":
     urltype = sys.argv[1]
-    season = int(sys.argv[2])
+    serie = sys.argv[2]
+    season = int(sys.argv[3])
 
     if urltype == 'players':
-        parser = PlayerTimesParser(season)
+        parser = PlayerTimesParser(season, serie)
         for event in parser.parse():
             print event.tojson()
 
     elif urltype == 'teams':
-        parser = TeamTimesParser(season)
+        parser = TeamTimesParser(season, serie)
         for event in parser.parse():
             print event.tojson()
             

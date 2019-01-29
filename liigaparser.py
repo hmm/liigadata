@@ -73,9 +73,10 @@ class LGParser(object):
                 return SeasonData(id=id, years=p)
 
 
-    def parseseason(self):
+    def parseseason(self, latest=False):
         r = requests.get(self.url)
         page = html.fromstring(r.content)
+        self.latest = latest
 
         self.season = self.getseason(self.url)
 
@@ -90,6 +91,7 @@ class LGParser(object):
     def parseplayoffs(self):
         r = requests.get(self.url)
         page = html.fromstring(r.content)
+        self.latest = False
 
         self.season = self.getseason(self.url)
         self.season.playoffs = True
@@ -275,7 +277,7 @@ class LGParser(object):
                 values = [t.text for t in tds[1:]]
                 number=int(values[0])
                 player = PlayerData(
-                    id=pid.replace('/pelaajat/',''),
+                    id=pid.replace('/fi/pelaajat/',''),
                     gameid=gamedata.id,
                     season=gamedata.season,
                     playoffs=gamedata.playoffs,
@@ -313,7 +315,7 @@ class LGParser(object):
                 values = [t.text for t in tds[1:]]
                 number=int(values[0])
                 gk = GoalkeeperData(
-                    id=pid.replace('/pelaajat/',''),
+                    id=pid.replace('/fi/pelaajat/',''),
                     gameid=gamedata.id,
                     season=gamedata.season,
                     playoffs = gamedata.playoffs,
@@ -341,12 +343,19 @@ class LGParser(object):
             dt = datetime.date(int(gamedate[:4]), int(gamedate[4:6]), int(gamedate[6:8]))
             if dt > datetime.date.today():
                 return
+            if self.latest and dt < datetime.date.today() - datetime.timedelta(days=14):
+                return
 
         r = requests.get(url)
         page = html.fromstring(r.content)
         if not teams:
             for e in self.getteams(page):
                 yield e
+
+        if not teams[0]:
+            title = page.xpath("head/title")[0]
+            parts = title.text.split()
+            teams = (parts[2], parts[4])
 
         hometeam = self.teams[teams[0]].id
         awayteam = self.teams[teams[1]].id
@@ -455,9 +464,19 @@ class LGParser(object):
             if ecls in ['odd', 'even', 'period', 'shooting-stats odd', 'shooting-stats even']:
                 tds = e.xpath("td")
                 if tds and len(tds) == 3:
-                    home, gtime, away = tds
-                    if gtime.text and len(gtime.text) > 4 and gtime.text[-3] == ':':
-                        e = self.parsegameevent(gamedata, eventnum, home, gtime, away, playersbyname)
+                    home, gtimetd, away = tds
+                    gtimei = gtimetd.xpath("i")
+                    if gtimei:
+                        gtime = gtimei[0]
+                    else:
+                        gtime = gtimetd
+                    if gtime.text:
+                        gtimetxt = gtime.text.strip()
+                    else:
+                        gtimetxt = None
+                    
+                    if gtimetxt and len(gtimetxt) > 4 and gtimetxt[-3] == ':':
+                        e = self.parsegameevent(gamedata, eventnum, home, gtimetxt, away, playersbyname)
                         if e:
                             eventnum += 1
                             yield e
@@ -510,7 +529,7 @@ class LGParser(object):
                             i = 1
                             for (gke, team, vsteam) in [(home, hometeam, awayteam), (away, awayteam, hometeam)]:
                                 number = int(gke.text.strip().replace('#', ''))
-                                playerid = gke.xpath("a")[0].attrib.get('href').replace('/pelaajat/','')
+                                playerid = gke.xpath("a")[0].attrib.get('href').replace('/fi/pelaajat/','')
                                 gkin = GameEventData(
                                     id = gamedata.id * 100000 + i,
                                     season = gamedata.season,
@@ -586,9 +605,12 @@ class LGParser(object):
                 period = periodtxt.split('-')[-1]
                 if period == '4':
                     period = 'JA'
-                    
-                shotnum = shotnums.get(timetxt, 0)
-                shotnums[timetxt] = shotnum + 1
+
+                if result == 'goal':
+                    shotnum = 9
+                else:
+                    shotnum = shotnums.get(timetxt, 0)
+                    shotnums[timetxt] = shotnum + 1
                 id = gamedata.id * 100000 + int(timetxt.replace(':','')) * 10 + shotnum
                 shot = GameEventData(
                     id = id,
@@ -658,31 +680,45 @@ class LGParser(object):
                     **pdict)
                 yield gamestats
                             
-    def parsegameevent(self, gamedata, eventnum, home, gtime, away, playersbyname):
-        #print "TIME", gtime.text
-        id = gamedata.id * 1000000 + int(gtime.text.replace(':',''))*100 + eventnum
+    def parsegameevent(self, gamedata, eventnum, home, gtimetxt, away, playersbyname):
+        #print "TIME", gtimetxt, home.text, away.text
+        id = gamedata.id * 1000000 + int(gtimetxt.replace(':',''))*100 + eventnum
         ret = []
-        if home.text:
-            elem = home
-            team = gamedata.home.get('team')
-            vsteam = gamedata.away.get('team')
-            athome = True
-        if away.text:
-            elem = away
-            team = gamedata.away.get('team')
-            vsteam = gamedata.home.get('team')
-            athome = False
+        if gtimetxt == '65:00' and home.text and away.text:
+            hometext = home.text.strip()
+            if not hometext and home.xpath("strong"):
+                hometext = home.xpath("strong")[0].text.strip()
+            awaytext = away.text.strip()
+            if not awaytext and away.xpath("strong"):
+                awaytext = away.xpath("strong")[0].text.strip()
+
+            if awaytext.startswith("#"):
+                elem = away
+                gke = home
+                team = gamedata.away.get('team')
+                vsteam = gamedata.home.get('team')
+                athome = True
+
+            elif hometext.startswith("#"):
+                elem = home
+                gke = away
+                team = gamedata.home.get('team')
+                vsteam = gamedata.away.get('team')
+                athome = False
+
+        else:
             if home.text:
-                if gtime.text == '65:00':
-                    if home.text.startswith("(MV "):
-                        gke = home
-                    elif away.text.startswith("(MV "):
-                        elem = home
-                        gke = away
-                        team = gamedata.home.get('team')
-                        vsteam = gamedata.away.get('team')
-                else:
-                    raise Exception("Both home and away event %s" % html.tostring(gtime))
+                elem = home
+                team = gamedata.home.get('team')
+                vsteam = gamedata.away.get('team')
+                athome = True
+            if away.text:
+                elem = away
+                team = gamedata.away.get('team')
+                vsteam = gamedata.home.get('team')
+                athome = False
+                if home.text:
+                    raise Exception("Both home and away event %s" % gtimetxt)
         #print html.tostring(elem)
 
         strong = None
@@ -703,7 +739,7 @@ class LGParser(object):
         def playerdata(data):
             return dict(
                 number=int(data[0]),
-                id=data[1].replace('/pelaajat/',''),
+                id=data[1].replace('/fi/pelaajat/',''),
                 #name=data[2],
                 team=team,
             )
@@ -728,7 +764,7 @@ class LGParser(object):
             goalattr = [s.strip(',') for s in scorer[3].split()[2:]]
 
                     
-            if gtime.text > '60:00':
+            if gtimetxt > '60:00':
                 goalattr.append('JA')
 
             eventattr['goalattr'] = ' '.join(goalattr)
@@ -746,14 +782,15 @@ class LGParser(object):
 
             eventattr['scorer'] = dict(
                 number=int(strong.text.strip()[1:]),
-                id=playermeta[0][0].replace('/pelaajat/',''),
+                id=playermeta[0][0].replace('/fi/pelaajat/',''),
                 team=team,
             )
             eventattr['psorder']=self.psorder
             eventattr['psteamorder']=psteamorder
+            gkedivs = gke.xpath("div/div")
             eventattr['pskeeper']=dict(
-                number=int(gke.text.strip()[5:]),
-                id=gke.xpath("a")[0].attrib.get('href').replace('/pelaajat/',''),
+                number=int(gkedivs[-1].text.strip()[5:]),
+                id=gkedivs[-1].xpath("a")[0].attrib.get('href').replace('/fi/pelaajat/',''),
                 team=vsteam,
             )
             eventattr['assist1'] = None
@@ -791,7 +828,8 @@ class LGParser(object):
             "kiekon sulkeminen" in players[0][3] or
             "pelin viivytt" in players[0][3] or
             "kiinnipit" in players[0][3] or
-            "heitto" in players[0][3]
+            "heitto" in players[0][3] or
+            u"estäminen" in players[0][3]
             ):
             eventtype = 'penalty'
             eventattr['minutes'] = 0
@@ -850,7 +888,7 @@ class LGParser(object):
             eventattr['player'] = pp
             eventattr['keeper'] = None
 
-        elif gtime.text == '65:00' and playermeta and not players and not gamedata.playoffs:
+        elif gtimetxt == '65:00' and playermeta and not players and not gamedata.playoffs:
             eventtype = 'penaltyshot'
             self.psorder += 1
             if athome:
@@ -862,12 +900,13 @@ class LGParser(object):
 
             eventattr['player'] = dict(
                 number=int(elem.text.strip()[1:]),
-                id=playermeta[0][0].replace('/pelaajat/',''),
+                id=playermeta[0][0].replace('/fi/pelaajat/',''),
                 team=team,
             )
+            gkedivs = gke.xpath("div/div")
             eventattr['keeper'] = dict(
-                number=int(gke.text.strip()[5:]),
-                id=gke.xpath("a")[0].attrib.get('href').replace('/pelaajat/',''),
+                number=int(gkedivs[-1].text.strip()[5:]),
+                id=gkedivs[-1].xpath("a")[0].attrib.get('href').replace('/fi/pelaajat/',''),
                 team=vsteam,
             )
             eventattr['psorder']=self.psorder
@@ -892,18 +931,18 @@ class LGParser(object):
                 eventattr['reason'] = eventattr['reason'].replace('Joukkuerangaistus ', '')
 
         if gamedata.playoffs:
-            minutes = int(gtime.text.split(':')[0])
+            minutes = int(gtimetxt.split(':')[0])
             period = str(minutes/20+1)
         else:
-            if gtime.text <= '20:00':
+            if gtimetxt <= '20:00':
                 period = '1'
-            elif gtime.text <= '40:00':
+            elif gtimetxt <= '40:00':
                 period = '2'
-            elif gtime.text <= '60:00':
+            elif gtimetxt <= '60:00':
                 period = '3'
-            elif gtime.text < '65:00':
+            elif gtimetxt < '65:00':
                 period = 'JA'
-            elif gtime.text == '65:00':
+            elif gtimetxt == '65:00':
                 if eventtype in ['goal', 'penaltyshot']:
                     period = 'VL'
                 else:
@@ -915,7 +954,7 @@ class LGParser(object):
             season = gamedata.season,
             playoffs = gamedata.playoffs,
             gameid=gamedata.id,
-            time=gtime.text,
+            time=gtimetxt,
             eventtype=eventtype,
             team=team,
             vsteam=vsteam,
@@ -933,6 +972,9 @@ if __name__ == "__main__":
     parser = LGParser(url)
     if urltype == 'season':
         for event in parser.parseseason():
+            print event.tojson()
+    if urltype == 'seasonlatest':
+        for event in parser.parseseason(latest=True):
             print event.tojson()
     elif urltype == 'playoffs':
         for event in parser.parseplayoffs():

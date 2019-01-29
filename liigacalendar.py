@@ -103,6 +103,8 @@ class LGParser(object):
         if gamedate:
             dt = datetime.date(int(gamedate[:4]), int(gamedate[4:6]), int(gamedate[6:8]))
 
+        if teams[0] == "?":
+            return
         hometeam = self.teams[teams[0]].id
         awayteam = self.teams[teams[1]].id
         
