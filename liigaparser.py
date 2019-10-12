@@ -3,7 +3,7 @@
 
 
 import datetime
-import urlparse
+import urllib
 import requests
 import json
 import sys
@@ -220,18 +220,17 @@ class LGParser(object):
                     if head == 'Maalivahdit' and 'startgk' not in teamdata:
                         teamdata['startgk'] = jersey
                         
-
         refnum = 1
         nonum = 0
-        for p in refereediv.xpath("div[@class='player']"):
 
-            jerseyelem = p.xpath("div[@class='jersey']")
+        for rp in refereediv.xpath("div[@class='player']/a"):
+            jerseyelem = rp.xpath("div[@class='jersey']")
             if jerseyelem and jerseyelem[0] is not None and jerseyelem[0].text:
                 jersey = int(jerseyelem[0].text[1:])
             else:
                 jersey = nonum
                 nonum+=1
-            nametxt = p.xpath("div[@class='name']")[0].text
+            nametxt = rp.xpath('div[@class="name"]')[0].text
             refereetag = u' (Päätuomari)'
             linesmantag = u' (Linjatuomari)'
                            
@@ -271,7 +270,7 @@ class LGParser(object):
                              (awayteam, awayrows, awaylines)]:
             for r in rows:
                 tds = r.xpath("td")
-                pdata = tds[0].xpath("strong/a")[0]
+                pdata = tds[0].xpath("a")[0]
                 pid = pdata.attrib.get('href')
                 pname = pdata.text
                 values = [t.text for t in tds[1:]]
@@ -299,7 +298,8 @@ class LGParser(object):
                     shotpct=self.genpct(values[13]),
                     faceoffs=int(values[14]),
                     faceoffpct=self.genpct(values[15]),
-                    playtime=values[16],
+                    skating=int(values[16].replace(' ', '')),
+                    playtime=values[17],
                     lineno=lines[number],
                     gh=number==lines.get('gh')
                 )
@@ -336,7 +336,7 @@ class LGParser(object):
                 
 
     def parsegame(self, gameno, gamedate, gameurl, teams, playoffs=False, seriesgameno=None):
-        url = urlparse.urljoin(self.url, gameurl)
+        url = urllib.parse.urljoin(self.url, gameurl)
         #print gameno, url
         identifier = url.split('/')[-3]
         if gamedate:
@@ -445,7 +445,7 @@ class LGParser(object):
             if tm > '60:00':
                 periods.append(dict(number=4, name='JA'))
         else:
-            for i in range(1, len(periodstxt.split(','))):
+            for i in range(1, len(periodstxt.split(','))+1):
                 periods.append(dict(number=i, name=str(i)))
 
         gamestats = dict()
@@ -516,12 +516,25 @@ class LGParser(object):
                             attrname = 'blocked'
                         elif gtime.text.startswith('Yhteens'):
                             attrname = 'total'
-                        for p in periods:
-                            p['home%s' % attrname] = home.attrib.get('data-period%d' % p['number'], 0)
-                            p['away%s' % attrname] = away.attrib.get('data-period%d' % p['number'], 0)
+                        elif gtime.text == 'Kovin laukaus':
+                            attrname = None
+                            for shotelem, hateam in ((home, hometeam), (away, awayteam)):
+                                ha=shotelem.attrib['class']
+                                shotplayer = shotelem.xpath('a')
+                                if shotplayer:
+                                    gamestats['%sfastestshot' % ha] = float(shotplayer[0].tail.strip().split()[0].replace(',', '.'))
+                                    #gamestats['%sfastestshooter' % ha] = shotplayer[0].attrib.get('href').replace('/fi/pelaajat/','')
+                                    gamestats['%sfastestshooter' % ha] = playersbyname.get((hateam, shotplayer[0].text))
+                        else:
+                            attrname = None
 
-                        gamestats['home%s' % attrname] = int(home.text)
-                        gamestats['away%s' % attrname] = int(away.text)
+                        if attrname:
+                            for p in periods:
+                                p['home%s' % attrname] = home.attrib.get('data-period%d' % p['number'], 0)
+                                p['away%s' % attrname] = away.attrib.get('data-period%d' % p['number'], 0)
+
+                            gamestats['home%s' % attrname] = int(home.text)
+                            gamestats['away%s' % attrname] = int(away.text)
 
 
                     elif category == 'Maalivahdit':
@@ -551,6 +564,15 @@ class LGParser(object):
                                 i += 1
                             gkstarts = True
 
+                    elif category == 'Nopein luistelija':
+                        for shotelem, hateam in ((home, hometeam), (away, awayteam)):
+                            ha=shotelem.attrib['class']
+                            skater = shotelem.xpath('a')
+                            if skater:
+                                gamestats['%sfastestskating' % ha] = float(skater[0].tail.strip().split()[0].replace(',', '.'))
+                                gamestats['%sfastestskater' % ha] = playersbyname.get((hateam, skater[0].text))
+
+
                 elif ecls == 'period' and tds and len(tds) == 1:
                     category = tds[0].text
 
@@ -574,8 +596,8 @@ class LGParser(object):
                 blocker = None
 
                 if not location:
-                    print html.tostring(s)
-                    print gamedata
+                    print(html.tostring(s))
+                    print(gamedata)
                     raise Exception("No location")
 
                 if location == 'home':
@@ -669,7 +691,10 @@ class LGParser(object):
             else:
                 for t in ['home', 'away']:
                     del pdict[t]['gamescore']
-                    for attr in ['ppgoals', 'ppchances', 'pppct', 'pptime']:
+                    for attr in ['ppgoals', 'ppchances', 'pppct', 'pptime',
+                                 'fastestshot', 'fastestshooter',
+                                 'fastestskating', 'fastestskater'
+                    ]:
                         pdict[t][attr] = p.get("%s%s" % (t, attr))
                     
                 gamestats = GameStatsData(
@@ -972,15 +997,15 @@ if __name__ == "__main__":
     parser = LGParser(url)
     if urltype == 'season':
         for event in parser.parseseason():
-            print event.tojson()
+            print(event.tojson())
     if urltype == 'seasonlatest':
         for event in parser.parseseason(latest=True):
-            print event.tojson()
+            print(event.tojson())
     elif urltype == 'playoffs':
         for event in parser.parseplayoffs():
-            print event.tojson()
+            print(event.tojson())
     elif urltype == 'game':
         for event in parser.parsegameurl():
-            print event.tojson()
+            print(event.tojson())
         
         
