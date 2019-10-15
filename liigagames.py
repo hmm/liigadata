@@ -3,7 +3,7 @@
 
 
 import datetime
-import urlparse
+import urllib
 import requests
 import json
 import sys
@@ -155,8 +155,8 @@ class LGParser(object):
         try:
             return self.teams[teamname]
         except:
-            print origname, teamname
-            print self.teams.keys()
+            print(origname, teamname)
+            print(self.teams.keys())
             raise
 
 
@@ -203,7 +203,7 @@ class LGParser(object):
             resultattr = tds[6].text.strip()
             score = "%d-%d" % (int(homescore), int(awayscore))
             
-            url = urlparse.urljoin(self.url, gameurl)
+            url = urllib.parse.urljoin(self.url, gameurl)
             identifier = url.split('/')[-3]
             if gamedate:
                 dt = datetime.date(int(gamedate[:4]), int(gamedate[4:6]), int(gamedate[6:8]))
@@ -279,18 +279,18 @@ if __name__ == "__main__":
         url = sys.argv[2]
         parser = LGParser(url)
         for event in parser.parseseason():
-            print event.tojson()
+            print(event.tojson())
     elif urltype == "history":
-        for i in range(1975, 2019):
+        for i in range(1975, 2020):
             url = "http://liiga.fi/ottelut/%d-%d/runkosarja/" % (i, i+1)
             parser = LGParser(url)
             for event in parser.parseseason():
-                print event.tojson()
+                print(event.tojson())
             url = "http://liiga.fi/ottelut/%d-%d/playoffs/" % (i, i+1)
 
             for event in parser.parseplayoffs(url):
-                print event.tojson()
+                print(event.tojson())
 
             for event in parser.getstats(i):
-                print event.tojson()
+                print(event.tojson())
             
