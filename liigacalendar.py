@@ -3,7 +3,10 @@
 
 
 import datetime
-import urlparse
+try:
+	import urlparse
+except ImportError:
+	import urllib.parse as urlparse
 import requests
 import json
 import sys
@@ -130,12 +133,12 @@ if __name__ == "__main__":
     parser = LGParser(url)
     if urltype == 'season':
         for event in parser.parseseason():
-            print event.tojson()
+            print(event.tojson())
     elif urltype == 'playoffs':
         for event in parser.parseplayoffs():
-            print event.tojson()
+            print(event.tojson())
     elif urltype == 'game':
         for event in parser.parsegameurl():
-            print event.tojson()
+            print(event.tojson())
         
         
